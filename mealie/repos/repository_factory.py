@@ -15,6 +15,7 @@ from mealie.db.models.household.events import GroupEventNotifierModel
 from mealie.db.models.household.household import Household
 from mealie.db.models.household.household_to_recipe import HouseholdToRecipe
 from mealie.db.models.household.invite_tokens import GroupInviteToken
+from mealie.db.models.household.meal_queue import MealQueueItem
 from mealie.db.models.household.mealplan import GroupMealPlan, GroupMealPlanRules
 from mealie.db.models.household.preferences import HouseholdPreferencesModel
 from mealie.db.models.household.recipe_action import GroupRecipeAction
@@ -64,6 +65,7 @@ from mealie.schema.household.webhook import ReadWebhook
 from mealie.schema.labels import MultiPurposeLabelOut
 from mealie.schema.meal_plan.new_meal import ReadPlanEntry
 from mealie.schema.meal_plan.plan_rules import PlanRulesOut
+from mealie.schema.meal_queue import ReadMealQueueItem
 from mealie.schema.recipe import Recipe, RecipeCommentOut, RecipeToolOut
 from mealie.schema.recipe.recipe_category import CategoryOut, TagOut
 from mealie.schema.recipe.recipe_ingredient import IngredientFood, IngredientUnit
@@ -77,6 +79,7 @@ from mealie.schema.user.user_passwords import PrivatePasswordResetToken
 from ._utils import NOT_SET, NotSet
 from .repository_generic import GroupRepositoryGeneric, HouseholdRepositoryGeneric
 from .repository_group import RepositoryGroup
+from .repository_meal_queue import RepositoryMealQueue
 from .repository_meals import RepositoryMeals
 from .repository_recipes import RepositoryRecipes
 from .repository_shopping_list import RepositoryShoppingList
@@ -298,6 +301,21 @@ class AllRepositories:
     def meals(self) -> RepositoryMeals:
         return RepositoryMeals(
             self.session, PK_ID, GroupMealPlan, ReadPlanEntry, group_id=self.group_id, household_id=self.household_id
+        )
+
+    @cached_property
+    def meal_queue(self) -> RepositoryMealQueue:
+        """
+        The "meal queue" is a fork-only feature: an undated backlog of meals the household
+        plans to cook, independent of the date-based meal planner/calendar.
+        """
+        return RepositoryMealQueue(
+            self.session,
+            PK_ID,
+            MealQueueItem,
+            ReadMealQueueItem,
+            group_id=self.group_id,
+            household_id=self.household_id,
         )
 
     @cached_property

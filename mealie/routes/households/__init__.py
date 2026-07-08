@@ -6,6 +6,7 @@ from . import (
     controller_group_recipe_actions,
     controller_household_self_service,
     controller_invitations,
+    controller_meal_queue,
     controller_mealplan,
     controller_mealplan_rules,
     controller_shopping_lists,
@@ -22,6 +23,9 @@ router.include_router(controller_invitations.router)
 router.include_router(controller_shopping_lists.router)
 router.include_router(controller_shopping_lists.item_router)
 router.include_router(controller_webhooks.router)
+
+# Meal Queue is a fork-only, additive feature. See controller_meal_queue.py for details.
+router.include_router(controller_meal_queue.router)
 
 # mealplan_rules must be added before mealplan due to the way the routes are defined
 router.include_router(controller_mealplan_rules.router)

@@ -410,7 +410,10 @@
     "applies-on-days": "Applies on {0}s",
     "meal-plan-settings": "Meal Plan Settings",
     "add-all-to-list": "Add All to List",
-    "add-day-to-list": "Add Day to List"
+    "add-day-to-list": "Add Day to List",
+    "meal-queue": "Meal Queue",
+    "show-eaten": "Show eaten",
+    "meal-queue-empty": "Your meal queue is empty. Add the meals you're planning to cook this week and tick them off as you go."
   },
   "migration": {
     "migration-data-removed": "Migration data removed",
@@ -1399,7 +1402,6 @@
       "already-set-up-bring-to-homepage": "I'm already set up, just bring me to the homepage",
       "common-settings-for-new-sites": "Here are some common settings for new sites",
       "setup-complete": "Setup Complete!",
-
       "ai-providers-description": "Optionally configure AI providers for your group. AI providers enable features like creating recipes from images, importing recipes from videos, and enhanced ingredient parsing. You can always configure this later from your group settings.",
       "here-are-a-few-things-to-help-you-get-started": "Here are a few things to help you get started with Mealie",
       "restore-from-v1-backup": "Have a backup from a previous instance of Mealie v1? You can restore it here.",
