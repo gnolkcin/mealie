@@ -60,6 +60,44 @@ export const useMealQueue = function () {
       }
       loading.value = false;
     },
+    async clearEaten() {
+      loading.value = true;
+      await api.mealQueue.clearEaten();
+      await this.refreshAll();
+      loading.value = false;
+    },
+    /**
+     * Add a random recipe to the queue. Fetches a small random page of recipes
+     * (server-side `orderBy=random`, which requires a paginationSeed) and prefers
+     * one that isn't already sitting uneaten in the queue.
+     */
+    async addRandom() {
+      loading.value = true;
+      const { data } = await api.recipes.getAll(1, 5, {
+        orderBy: "random",
+        paginationSeed: Date.now().toString(),
+        orderDirection: "asc",
+      });
+
+      const candidates = data?.items ?? [];
+      if (!candidates.length) {
+        loading.value = false;
+        return null;
+      }
+
+      const queuedRecipeIds = new Set(
+        queueItems.value.filter(i => !i.eaten && i.recipeId).map(i => i.recipeId),
+      );
+      const pick = candidates.find(r => r.id && !queuedRecipeIds.has(r.id)) ?? candidates[0];
+      if (!pick?.id) {
+        loading.value = false;
+        return null;
+      }
+
+      const created = await this.createOne({ recipeId: pick.id });
+      loading.value = false;
+      return created;
+    },
   };
 
   useAsyncData(useAsyncKey(), async () => {

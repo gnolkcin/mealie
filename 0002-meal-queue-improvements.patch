@@ -1,0 +1,645 @@
+From eb28c93af3501ca94b5281f2fff52335bfbad05b Mon Sep 17 00:00:00 2001
+From: Fork Author <fork@example.com>
+Date: Wed, 8 Jul 2026 15:59:04 +0000
+Subject: [PATCH] feat: meal queue improvements
+
+- Add 'Add to Queue' to the recipe context menu, available from both the
+  recipe list cards (desktop + mobile) and the individual recipe page
+  action menu.
+- Add an 'Add Random' button on the queue page (server-side random
+  ordering via orderBy=random + paginationSeed; prefers recipes not
+  already queued).
+- Fix the 'Show eaten' toggle: the frontend sends the camelCase
+  includeEaten query param (like the rest of the mealie API), but the
+  bare FastAPI parameter only accepted include_eaten, so the flag was
+  silently ignored and eaten items could never be shown. Added an
+  explicit Query alias.
+- Add 'Clear Eaten' (with confirmation dialog) backed by a new
+  DELETE /api/households/meal-queue/eaten endpoint, registered before
+  the dynamic /{item_id} route.
+- Fix the stretched/overflowing recipe thumbnail on desktop: the image
+  now lives in a fixed 125x125 container using the small image size
+  (RecipeCardImage enforces min-height 125, which previously overflowed
+  the 60px slot).
+- Queue entries now link to their recipe: clicking the thumbnail or the
+  recipe name navigates to /g/{groupSlug}/r/{slug}.
+- Integration test covering includeEaten, clear-eaten, and recipe slug
+  presence for linking.
+---
+ .../Domain/Recipe/RecipeActionMenu.vue        |   1 +
+ .../components/Domain/Recipe/RecipeCard.vue   |   1 +
+ .../Domain/Recipe/RecipeCardMobile.vue        |   1 +
+ .../RecipeContextMenu/RecipeContextMenu.vue   |   2 +
+ .../RecipeContextMenuContent.vue              |  23 +++
+ frontend/app/composables/use-meal-queue.ts    |  38 ++++
+ frontend/app/lang/messages/en-US.json         |   6 +
+ frontend/app/lib/api/user/meal-queue.ts       |  12 +-
+ .../app/pages/household/meal-queue/index.vue  | 171 +++++++++++++++---
+ mealie/repos/repository_meal_queue.py         |  11 ++
+ .../households/controller_meal_queue.py       |  15 +-
+ .../test_meal_queue_improvements.py           |  53 ++++++
+ 12 files changed, 302 insertions(+), 32 deletions(-)
+ create mode 100644 tests/integration_tests/user_household_tests/test_meal_queue_improvements.py
+
+diff --git a/frontend/app/components/Domain/Recipe/RecipeActionMenu.vue b/frontend/app/components/Domain/Recipe/RecipeActionMenu.vue
+index 2e9dd63..f53e61c 100644
+--- a/frontend/app/components/Domain/Recipe/RecipeActionMenu.vue
++++ b/frontend/app/components/Domain/Recipe/RecipeActionMenu.vue
+@@ -68,6 +68,7 @@
+           download: loggedIn,
+           duplicate: loggedIn,
+           mealplanner: loggedIn,
++          mealQueue: loggedIn,
+           shoppingList: loggedIn,
+           print: true,
+           printPreferences: true,
+diff --git a/frontend/app/components/Domain/Recipe/RecipeCard.vue b/frontend/app/components/Domain/Recipe/RecipeCard.vue
+index 14a8a54..2762f53 100644
+--- a/frontend/app/components/Domain/Recipe/RecipeCard.vue
++++ b/frontend/app/components/Domain/Recipe/RecipeCard.vue
+@@ -80,6 +80,7 @@
+                 edit: false,
+                 download: true,
+                 mealplanner: true,
++                mealQueue: true,
+                 shoppingList: true,
+                 print: false,
+                 printPreferences: false,
+diff --git a/frontend/app/components/Domain/Recipe/RecipeCardMobile.vue b/frontend/app/components/Domain/Recipe/RecipeCardMobile.vue
+index 0112d31..4bb6de3 100644
+--- a/frontend/app/components/Domain/Recipe/RecipeCardMobile.vue
++++ b/frontend/app/components/Domain/Recipe/RecipeCardMobile.vue
+@@ -108,6 +108,7 @@
+                   edit: false,
+                   download: true,
+                   mealplanner: true,
++                  mealQueue: true,
+                   shoppingList: true,
+                   print: false,
+                   printPreferences: false,
+diff --git a/frontend/app/components/Domain/Recipe/RecipeContextMenu/RecipeContextMenu.vue b/frontend/app/components/Domain/Recipe/RecipeContextMenu/RecipeContextMenu.vue
+index 996697d..0a5b6de 100644
+--- a/frontend/app/components/Domain/Recipe/RecipeContextMenu/RecipeContextMenu.vue
++++ b/frontend/app/components/Domain/Recipe/RecipeContextMenu/RecipeContextMenu.vue
+@@ -52,6 +52,7 @@ interface ContextMenuIncludes {
+   download?: boolean;
+   duplicate?: boolean;
+   mealplanner?: boolean;
++  mealQueue?: boolean;
+   shoppingList?: boolean;
+   print?: boolean;
+   printPreferences?: boolean;
+@@ -89,6 +90,7 @@ const props = withDefaults(defineProps<Props>(), {
+     download: true,
+     duplicate: false,
+     mealplanner: true,
++    mealQueue: true,
+     shoppingList: true,
+     print: true,
+     printPreferences: true,
+diff --git a/frontend/app/components/Domain/Recipe/RecipeContextMenu/RecipeContextMenuContent.vue b/frontend/app/components/Domain/Recipe/RecipeContextMenu/RecipeContextMenuContent.vue
+index ebe6df5..348954d 100644
+--- a/frontend/app/components/Domain/Recipe/RecipeContextMenu/RecipeContextMenuContent.vue
++++ b/frontend/app/components/Domain/Recipe/RecipeContextMenu/RecipeContextMenuContent.vue
+@@ -120,6 +120,7 @@ export interface ContextMenuIncludes {
+   download: boolean;
+   duplicate: boolean;
+   mealplanner: boolean;
++  mealQueue: boolean;
+   shoppingList: boolean;
+   print: boolean;
+   printPreferences: boolean;
+@@ -156,6 +157,7 @@ const props = withDefaults(defineProps<Props>(), {
+     download: true,
+     duplicate: false,
+     mealplanner: true,
++    mealQueue: true,
+     shoppingList: true,
+     print: true,
+     printPreferences: true,
+@@ -252,6 +254,13 @@ const defaultItems: { [key: string]: ContextMenuItem } = {
+     event: "mealplanner",
+     isPublic: false,
+   },
++  mealQueue: {
++    title: i18n.t("recipe.add-to-queue"),
++    icon: $globals.icons.potSteam,
++    color: undefined,
++    event: "mealQueue",
++    isPublic: false,
++  },
+   shoppingList: {
+     title: i18n.t("recipe.add-to-list"),
+     icon: $globals.icons.cartCheck,
+@@ -387,6 +396,19 @@ async function addRecipeToPlan() {
+   }
+ }
+ 
++async function addRecipeToQueue() {
++  const { response } = await api.mealQueue.createOne({
++    recipeId: props.recipeId,
++  });
++
++  if (response?.status === 201) {
++    alert.success(i18n.t("recipe.recipe-added-to-queue") as string);
++  }
++  else {
++    alert.error(i18n.t("recipe.failed-to-add-recipe-to-queue") as string);
++  }
++}
++
+ async function duplicateRecipe() {
+   const { data } = await api.recipes.duplicateOne(props.slug, recipeName.value);
+   if (data && data.slug) {
+@@ -408,6 +430,7 @@ const eventHandlers: { [key: string]: () => void | Promise<any> } = {
+   mealplanner: () => {
+     mealplannerDialog.value = true;
+   },
++  mealQueue: addRecipeToQueue,
+   printPreferences: async () => {
+     if (!recipeRef.value) {
+       await refreshRecipe();
+diff --git a/frontend/app/composables/use-meal-queue.ts b/frontend/app/composables/use-meal-queue.ts
+index 5085aa1..209dd50 100644
+--- a/frontend/app/composables/use-meal-queue.ts
++++ b/frontend/app/composables/use-meal-queue.ts
+@@ -60,6 +60,44 @@ export const useMealQueue = function () {
+       }
+       loading.value = false;
+     },
++    async clearEaten() {
++      loading.value = true;
++      await api.mealQueue.clearEaten();
++      await this.refreshAll();
++      loading.value = false;
++    },
++    /**
++     * Add a random recipe to the queue. Fetches a small random page of recipes
++     * (server-side `orderBy=random`, which requires a paginationSeed) and prefers
++     * one that isn't already sitting uneaten in the queue.
++     */
++    async addRandom() {
++      loading.value = true;
++      const { data } = await api.recipes.getAll(1, 5, {
++        orderBy: "random",
++        paginationSeed: Date.now().toString(),
++        orderDirection: "asc",
++      });
++
++      const candidates = data?.items ?? [];
++      if (!candidates.length) {
++        loading.value = false;
++        return null;
++      }
++
++      const queuedRecipeIds = new Set(
++        queueItems.value.filter(i => !i.eaten && i.recipeId).map(i => i.recipeId),
++      );
++      const pick = candidates.find(r => r.id && !queuedRecipeIds.has(r.id)) ?? candidates[0];
++      if (!pick?.id) {
++        loading.value = false;
++        return null;
++      }
++
++      const created = await this.createOne({ recipeId: pick.id });
++      loading.value = false;
++      return created;
++    },
+   };
+ 
+   useAsyncData(useAsyncKey(), async () => {
+diff --git a/frontend/app/lang/messages/en-US.json b/frontend/app/lang/messages/en-US.json
+index fa707c0..da8bf52 100644
+--- a/frontend/app/lang/messages/en-US.json
++++ b/frontend/app/lang/messages/en-US.json
+@@ -413,6 +413,9 @@
+     "add-day-to-list": "Add Day to List",
+     "meal-queue": "Meal Queue",
+     "show-eaten": "Show eaten",
++    "clear-eaten": "Clear Eaten",
++    "clear-eaten-confirmation": "Are you sure you want to remove all eaten meals from the queue?",
++    "no-recipes-found-for-random": "No recipes found to add a random meal",
+     "meal-queue-empty": "Your meal queue is empty. Add the meals you're planning to cook this week and tick them off as you go."
+   },
+   "migration": {
+@@ -600,11 +603,14 @@
+     "date-format-hint-yyyy-mm-dd": "YYYY-MM-DD format",
+     "add-to-list": "Add to List",
+     "add-to-plan": "Add to Plan",
++    "add-to-queue": "Add to Queue",
+     "add-to-timeline": "Add to Timeline",
+     "recipe-added-to-list": "Recipe added to list",
+     "recipes-added-to-list": "Recipes added to list",
+     "successfully-added-to-list": "Successfully added to list",
+     "recipe-added-to-mealplan": "Recipe added to mealplan",
++    "recipe-added-to-queue": "Recipe added to meal queue",
++    "failed-to-add-recipe-to-queue": "Failed to add recipe to meal queue",
+     "failed-to-add-recipes-to-list": "Failed to add recipe to list",
+     "failed-to-add-recipe-to-mealplan": "Failed to add recipe to mealplan",
+     "failed-to-add-to-list": "Failed to add to list",
+diff --git a/frontend/app/lib/api/user/meal-queue.ts b/frontend/app/lib/api/user/meal-queue.ts
+index dbf1b2d..aa56d90 100644
+--- a/frontend/app/lib/api/user/meal-queue.ts
++++ b/frontend/app/lib/api/user/meal-queue.ts
+@@ -9,21 +9,27 @@ const prefix = "/api";
+ 
+ const routes = {
+   mealQueue: `${prefix}/households/meal-queue`,
++  mealQueueClearEaten: `${prefix}/households/meal-queue/eaten`,
+   mealQueueId: (id: string | number) => `${prefix}/households/meal-queue/${id}`,
+   mealQueueEaten: (id: string | number) => `${prefix}/households/meal-queue/${id}/eaten`,
+ };
+ 
+ export class MealQueueAPI extends BaseCRUDAPI<CreateMealQueueItem, ReadMealQueueItem, UpdateMealQueueItem> {
+-  baseRoute = routes.mealQueue;
+-  itemRoute = routes.mealQueueId;
++  override baseRoute = routes.mealQueue;
++  override itemRoute = routes.mealQueueId;
+ 
+   /** List queue entries. Pass `includeEaten: true` to also fetch items already ticked off. */
+   async getAllQueued(includeEaten = false) {
+     return await this.getAll(1, -1, { includeEaten });
+   }
+ 
++  /** Remove every already-eaten entry from the queue. Returns the deleted items. */
++  async clearEaten() {
++    return await this.requests.delete<ReadMealQueueItem[]>(routes.mealQueueClearEaten);
++  }
++
+   async setEaten(id: string | number, eaten: boolean) {
+-    return await this.requests.put<ReadMealQueueItem>(routes.mealQueueEaten(id), null, {
++    return await this.requests.put<ReadMealQueueItem, null>(routes.mealQueueEaten(id), null, {
+       params: { eaten },
+     });
+   }
+diff --git a/frontend/app/pages/household/meal-queue/index.vue b/frontend/app/pages/household/meal-queue/index.vue
+index 4bf028c..a63899c 100644
+--- a/frontend/app/pages/household/meal-queue/index.vue
++++ b/frontend/app/pages/household/meal-queue/index.vue
+@@ -42,17 +42,38 @@
+       </v-card-actions>
+     </BaseDialog>
+ 
++    <BaseDialog
++      v-model="state.clearEatenDialog"
++      :title="$t('meal-plan.clear-eaten')"
++      color="error"
++      :icon="$globals.icons.alertCircle"
++      can-confirm
++      @confirm="clearEaten"
++    >
++      <v-card-text>
++        {{ $t('meal-plan.clear-eaten-confirmation') }}
++      </v-card-text>
++    </BaseDialog>
++
+     <div class="d-flex flex-wrap align-center justify-space-between mb-2">
+       <h1 class="text-h5">
+         {{ $t('meal-plan.meal-queue') }}
+       </h1>
+-      <div class="d-flex ml-auto">
++      <div class="d-flex flex-wrap align-center ml-auto">
+         <v-checkbox
+           v-model="includeEaten"
+           hide-details
+           :label="$t('meal-plan.show-eaten')"
+           class="my-auto mr-4"
+         />
++        <BaseButton
++          color="error"
++          variant="outlined"
++          :icon="$globals.icons.delete"
++          :text="$t('meal-plan.clear-eaten')"
++          class="mr-2"
++          @click="state.clearEatenDialog = true"
++        />
+         <BaseButton
+           color="info"
+           :icon="$globals.icons.cartCheck"
+@@ -62,6 +83,14 @@
+           class="mr-2"
+           @click="openShoppingListDialog"
+         />
++        <BaseButton
++          color="info"
++          :icon="$globals.icons.diceMultiple"
++          :text="$t('meal-plan.random-meal')"
++          :loading="state.randomLoading"
++          class="mr-2"
++          @click="addRandom"
++        />
+         <BaseButton
+           color="primary"
+           :icon="$globals.icons.foods"
+@@ -81,36 +110,62 @@
+         :key="item.id"
+         cols="12"
+         sm="6"
+-        md="4"
+-        lg="3"
++        md="6"
++        lg="4"
++        xl="3"
+       >
+-        <v-card :class="{ 'left-color-border': !item.eaten }" :variant="item.eaten ? 'tonal' : 'elevated'">
+-          <div class="d-flex align-center pa-2">
+-            <v-checkbox
+-              :model-value="item.eaten"
+-              hide-details
+-              class="flex-grow-0 mr-1"
+-              @update:model-value="(val) => actions.setEaten(item.id, !!val)"
+-            />
+-            <RecipeCardImage
+-              v-if="item.recipe"
+-              :recipe-id="item.recipe.id!"
+-              small
+-              height="60"
+-              :slug="item.recipe.slug"
+-              class="mr-2"
+-            />
+-            <div class="flex-grow-1" :style="item.eaten ? 'text-decoration: line-through; opacity: 0.6;' : ''">
+-              <div class="font-weight-medium">
+-                {{ item.recipe ? item.recipe.name : item.title }}
++        <v-card
++          class="queue-card"
++          :class="{ 'left-color-border': !item.eaten }"
++          :variant="item.eaten ? 'tonal' : 'elevated'"
++        >
++          <div class="d-flex align-stretch">
++            <div
++              class="queue-card-image flex-shrink-0"
++              :class="{ 'cursor-pointer': !!recipeRoute(item) }"
++              @click="openRecipe(item)"
++            >
++              <RecipeCardImage
++                v-if="item.recipe"
++                :recipe-id="item.recipe.id!"
++                :slug="item.recipe.slug"
++                small
++                height="125"
++                :icon-size="60"
++              />
++              <div v-else class="d-flex align-center justify-center fill-height">
++                <v-icon color="primary" size="60">
++                  {{ $globals.icons.primary }}
++                </v-icon>
+               </div>
+-              <div v-if="item.note" class="text-caption text-medium-emphasis">
+-                {{ item.note }}
++            </div>
++            <div class="d-flex align-center flex-grow-1 pa-2" style="min-width: 0;">
++              <v-checkbox
++                :model-value="item.eaten"
++                hide-details
++                class="flex-grow-0 mr-1"
++                @update:model-value="(val) => actions.setEaten(item.id, !!val)"
++              />
++              <div
++                class="flex-grow-1"
++                style="min-width: 0;"
++                :style="item.eaten ? 'text-decoration: line-through; opacity: 0.6;' : ''"
++              >
++                <component
++                  :is="recipeRoute(item) ? 'router-link' : 'div'"
++                  :to="recipeRoute(item) || undefined"
++                  class="font-weight-medium queue-card-title"
++                >
++                  {{ item.recipe ? item.recipe.name : item.title }}
++                </component>
++                <div v-if="item.note" class="text-caption text-medium-emphasis">
++                  {{ item.note }}
++                </div>
+               </div>
++              <v-btn icon variant="text" size="small" @click="actions.deleteOne(item.id)">
++                <v-icon>{{ $globals.icons.delete }}</v-icon>
++              </v-btn>
+             </div>
+-            <v-btn icon variant="text" size="small" @click="actions.deleteOne(item.id)">
+-              <v-icon>{{ $globals.icons.delete }}</v-icon>
+-            </v-btn>
+           </div>
+         </v-card>
+       </v-col>
+@@ -125,10 +180,15 @@ import { useMealQueue } from "~/composables/use-meal-queue";
+ import { useRecipeSearch } from "~/composables/recipes/use-recipe-search";
+ import { normalizeFilter } from "~/composables/use-utils";
+ import { useUserApi } from "~/composables/api";
++import { alert } from "~/composables/use-toast";
+ import type { ShoppingListSummary } from "~/lib/api/types/household";
++import type { ReadMealQueueItem } from "~/lib/api/types/meal-queue";
+ 
+ const i18n = useI18n();
+ const api = useUserApi();
++const auth = useMealieAuth();
++const route = useRoute();
++const router = useRouter();
+ 
+ useSeoMeta({
+   title: i18n.t("meal-plan.meal-queue"),
+@@ -139,6 +199,22 @@ const { queueItems, uneatenItems, includeEaten, actions, loading } = useMealQueu
+ const search = useRecipeSearch(api);
+ const noteOnly = ref(false);
+ 
++const groupSlug = computed(() => route.params.groupSlug || auth.user.value?.groupSlug || "");
++
++function recipeRoute(item: ReadMealQueueItem): string {
++  if (!item.recipe?.slug) {
++    return "";
++  }
++  return `/g/${groupSlug.value}/r/${item.recipe.slug}`;
++}
++
++function openRecipe(item: ReadMealQueueItem) {
++  const to = recipeRoute(item);
++  if (to) {
++    router.push(to);
++  }
++}
++
+ const newItem = ref({
+   title: "",
+   note: "",
+@@ -148,7 +224,9 @@ const newItem = ref({
+ const state = ref({
+   addDialog: false,
+   shoppingListDialog: false,
++  clearEatenDialog: false,
+   addAllLoading: false,
++  randomLoading: false,
+ });
+ 
+ const isCreateDisabled = computed(() => {
+@@ -168,6 +246,19 @@ async function createAndReset() {
+   resetNewItem();
+ }
+ 
++async function addRandom() {
++  state.value.randomLoading = true;
++  const created = await actions.addRandom();
++  state.value.randomLoading = false;
++  if (!created) {
++    alert.error(i18n.t("meal-plan.no-recipes-found-for-random"));
++  }
++}
++
++async function clearEaten() {
++  await actions.clearEaten();
++}
++
+ const hasUneatenRecipes = computed(() => uneatenItems.value.some(item => !!item.recipe));
+ 
+ const uneatenRecipesWithScales = computed(() => {
+@@ -197,4 +288,30 @@ async function openShoppingListDialog() {
+ .left-color-border {
+   border-left: 5px solid rgb(var(--v-theme-primary)) !important;
+ }
++
++.queue-card {
++  overflow: hidden;
++}
++
++/* Fixed-size thumbnail column: constrains the image so it can no longer
++   stretch/overflow the compact card on desktop. */
++.queue-card-image {
++  width: 125px;
++  height: 125px;
++  overflow: hidden;
++}
++
++.cursor-pointer {
++  cursor: pointer;
++}
++
++.queue-card-title {
++  color: inherit;
++  text-decoration: none;
++  display: block;
++}
++
++.queue-card-title:hover {
++  text-decoration: underline;
++}
+ </style>
+diff --git a/mealie/repos/repository_meal_queue.py b/mealie/repos/repository_meal_queue.py
+index 5c1c15a..dca8ef5 100644
+--- a/mealie/repos/repository_meal_queue.py
++++ b/mealie/repos/repository_meal_queue.py
+@@ -14,6 +14,17 @@ class RepositoryMealQueue(HouseholdRepositoryGeneric[ReadMealQueueItem, MealQueu
+             {"eaten": eaten, "eaten_at": datetime.now(UTC) if eaten else None},
+         )
+ 
++    def clear_eaten(self) -> list[ReadMealQueueItem]:
++        """Delete all eaten entries for this household, returning the deleted items."""
++        if not self.household_id:
++            raise Exception("household_id not set")
++
++        eaten_items = self.multi_query({"eaten": True})
++        if not eaten_items:
++            return []
++
++        return self.delete_many([item.id for item in eaten_items])
++
+     def get_uneaten(self) -> list[ReadMealQueueItem]:
+         if not self.household_id:
+             raise Exception("household_id not set")
+diff --git a/mealie/routes/households/controller_meal_queue.py b/mealie/routes/households/controller_meal_queue.py
+index 0b5c104..01f49a7 100644
+--- a/mealie/routes/households/controller_meal_queue.py
++++ b/mealie/routes/households/controller_meal_queue.py
+@@ -1,6 +1,6 @@
+ from functools import cached_property
+ 
+-from fastapi import APIRouter, Depends
++from fastapi import APIRouter, Depends, Query
+ 
+ from mealie.core.exceptions import mealie_registered_exceptions
+ from mealie.repos.repository_meal_queue import RepositoryMealQueue
+@@ -51,7 +51,11 @@ class MealQueueController(BaseCrudController):
+     def get_all(
+         self,
+         q: PaginationQuery = Depends(PaginationQuery),
+-        include_eaten: bool = False,
++        # The frontend api client sends camelCase query params (`includeEaten`), matching the rest
++        # of the mealie API surface (pydantic models camelize automatically, but this is a bare
++        # FastAPI param, so it needs an explicit alias). Without this alias the param was silently
++        # ignored and eaten items could never be shown ("show eaten" toggle bug).
++        include_eaten: bool = Query(False, alias="includeEaten"),
+     ):
+         """List the household's meal queue. By default only un-eaten entries are returned."""
+         if not include_eaten:
+@@ -88,6 +92,13 @@ class MealQueueController(BaseCrudController):
+         """Tick an entry off the queue (or un-tick it) without needing the full payload."""
+         return self.repo.set_eaten(item_id, eaten)
+ 
++    # NOTE: this static route MUST be registered before the dynamic `/{item_id}` DELETE route
++    # below, otherwise FastAPI would try (and fail) to parse "eaten" as an int item_id.
++    @router.delete("/eaten", response_model=list[ReadMealQueueItem])
++    def clear_eaten(self):
++        """Remove every entry that has already been ticked off ("eaten") from the queue."""
++        return self.repo.clear_eaten()
++
+     @router.delete("/{item_id}", response_model=ReadMealQueueItem)
+     def delete_one(self, item_id: int):
+         return self.mixins.delete_one(item_id)
+diff --git a/tests/integration_tests/user_household_tests/test_meal_queue_improvements.py b/tests/integration_tests/user_household_tests/test_meal_queue_improvements.py
+new file mode 100644
+index 0000000..fddfe2a
+--- /dev/null
++++ b/tests/integration_tests/user_household_tests/test_meal_queue_improvements.py
+@@ -0,0 +1,53 @@
++from tests.utils import api_routes  # noqa: F401  (ensures test utils import fine)
++from tests.utils.factories import random_string
++from tests.utils.fixture_schemas import TestUser
++
++
++def test_meal_queue_show_eaten_and_clear(api_client, unique_user: TestUser):
++    # create a recipe to attach
++    slug = random_string(10)
++    response = api_client.post("/api/recipes", json={"name": slug}, headers=unique_user.token)
++    assert response.status_code == 201
++    recipe_slug = response.json()
++    recipe = api_client.get(f"/api/recipes/{recipe_slug}", headers=unique_user.token).json()
++
++    # queue two items: one recipe-based, one note-only
++    r1 = api_client.post(
++        "/api/households/meal-queue", json={"recipeId": recipe["id"]}, headers=unique_user.token
++    )
++    assert r1.status_code == 201, r1.text
++    r2 = api_client.post(
++        "/api/households/meal-queue", json={"title": "leftovers"}, headers=unique_user.token
++    )
++    assert r2.status_code == 201, r2.text
++
++    item1 = r1.json()
++    item2 = r2.json()
++
++    # recipe summary must include the slug so the frontend can link to the recipe page
++    assert item1["recipe"]["slug"] == recipe["slug"]
++
++    # tick one off
++    r = api_client.put(f"/api/households/meal-queue/{item1['id']}/eaten", headers=unique_user.token)
++    assert r.status_code == 200
++    assert r.json()["eaten"] is True
++
++    # default listing hides eaten
++    r = api_client.get("/api/households/meal-queue", headers=unique_user.token)
++    ids = [i["id"] for i in r.json()["items"]]
++    assert item2["id"] in ids and item1["id"] not in ids
++
++    # the SHOW EATEN fix: camelCase includeEaten param must be honored
++    r = api_client.get("/api/households/meal-queue?includeEaten=true", headers=unique_user.token)
++    ids = [i["id"] for i in r.json()["items"]]
++    assert item1["id"] in ids and item2["id"] in ids, "includeEaten=true should return eaten items"
++
++    # clear eaten removes only the eaten entry
++    r = api_client.delete("/api/households/meal-queue/eaten", headers=unique_user.token)
++    assert r.status_code == 200, r.text
++    deleted_ids = [i["id"] for i in r.json()]
++    assert deleted_ids == [item1["id"]]
++
++    r = api_client.get("/api/households/meal-queue?includeEaten=true", headers=unique_user.token)
++    ids = [i["id"] for i in r.json()["items"]]
++    assert item1["id"] not in ids and item2["id"] in ids
+-- 
+2.43.0
+

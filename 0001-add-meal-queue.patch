@@ -1,0 +1,916 @@
+From b88f2fa05969e96b2c6079fa78f65599ffb63ebb Mon Sep 17 00:00:00 2001
+From: Fork Author <fork@example.com>
+Date: Wed, 8 Jul 2026 08:08:48 +0000
+Subject: [PATCH] feat: add Meal Queue (undated meal backlog with shopping-list
+ export)
+
+Adds a new, fully additive 'meal queue' feature as a mealie fork:
+- Backend: new MealQueueItem model/table, schema, repository, and
+  households/meal-queue controller. Only 4 existing files touched,
+  each by a single import + registration line (household models
+  __init__, repository_factory, routes/households __init__).
+- Frontend: new page at /household/meal-queue, api client, composable,
+  and a sidebar nav entry. Reuses the existing
+  RecipeDialogAddToShoppingList component for bulk-adding uneaten
+  queue recipes to a shopping list.
+- No existing route, model, or schema was modified in place.
+---
+ .../app/components/Layout/DefaultLayout.vue   |   6 +
+ frontend/app/composables/use-meal-queue.ts    |  75 +++++++
+ frontend/app/lang/messages/en-US.json         |   6 +-
+ frontend/app/lib/api/client-user.ts           |   5 +-
+ frontend/app/lib/api/types/meal-queue.ts      |  35 +++
+ frontend/app/lib/api/user/meal-queue.ts       |  30 +++
+ .../app/pages/household/meal-queue/index.vue  | 200 ++++++++++++++++++
+ ....00.00_a1b2c3meaLq_add_meal_queue_items.py |  59 ++++++
+ mealie/db/models/household/__init__.py        |   2 +
+ mealie/db/models/household/meal_queue.py      |  51 +++++
+ mealie/repos/repository_factory.py            |  18 ++
+ mealie/repos/repository_meal_queue.py         |  21 ++
+ mealie/routes/households/__init__.py          |   4 +
+ .../households/controller_meal_queue.py       |  93 ++++++++
+ mealie/schema/meal_queue/__init__.py          |  15 ++
+ mealie/schema/meal_queue/meal_queue.py        |  66 ++++++
+ 16 files changed, 683 insertions(+), 3 deletions(-)
+ create mode 100644 frontend/app/composables/use-meal-queue.ts
+ create mode 100644 frontend/app/lib/api/types/meal-queue.ts
+ create mode 100644 frontend/app/lib/api/user/meal-queue.ts
+ create mode 100644 frontend/app/pages/household/meal-queue/index.vue
+ create mode 100644 mealie/alembic/versions/2026-07-08-00.00.00_a1b2c3meaLq_add_meal_queue_items.py
+ create mode 100644 mealie/db/models/household/meal_queue.py
+ create mode 100644 mealie/repos/repository_meal_queue.py
+ create mode 100644 mealie/routes/households/controller_meal_queue.py
+ create mode 100644 mealie/schema/meal_queue/__init__.py
+ create mode 100644 mealie/schema/meal_queue/meal_queue.py
+
+diff --git a/frontend/app/components/Layout/DefaultLayout.vue b/frontend/app/components/Layout/DefaultLayout.vue
+index 8d7ec2b..808c1e1 100644
+--- a/frontend/app/components/Layout/DefaultLayout.vue
++++ b/frontend/app/components/Layout/DefaultLayout.vue
+@@ -242,6 +242,12 @@ const topLinks = computed<SideBarLink[]>(() => [
+     to: "/household/mealplan/planner/view",
+     restricted: true,
+   },
++  {
++    icon: $globals.icons.potSteam,
++    title: i18n.t("meal-plan.meal-queue"),
++    to: "/household/meal-queue",
++    restricted: true,
++  },
+   {
+     icon: $globals.icons.formatListCheck,
+     title: i18n.t("shopping-list.shopping-lists"),
+diff --git a/frontend/app/composables/use-meal-queue.ts b/frontend/app/composables/use-meal-queue.ts
+new file mode 100644
+index 0000000..5085aa1
+--- /dev/null
++++ b/frontend/app/composables/use-meal-queue.ts
+@@ -0,0 +1,75 @@
++import { useAsyncKey } from "./use-utils";
++import { useUserApi } from "~/composables/api";
++import type { CreateMealQueueItem, ReadMealQueueItem, UpdateMealQueueItem } from "~/lib/api/types/meal-queue";
++
++/**
++ * `useMealQueue` manages the household's undated "meal queue" (a.k.a. meal backlog):
++ * meals the household has decided to make soon without pinning them to a calendar date.
++ * This mirrors the shape of `useMealplans` (see use-group-mealplan.ts) but has no date range.
++ */
++export const useMealQueue = function () {
++  const api = useUserApi();
++  const loading = ref(false);
++  const includeEaten = ref(false);
++
++  const queueItems = ref<ReadMealQueueItem[]>([]);
++
++  const actions = {
++    async refreshAll() {
++      loading.value = true;
++      const { data } = await api.mealQueue.getAllQueued(includeEaten.value);
++      if (data) {
++        queueItems.value = data.items;
++      }
++      loading.value = false;
++    },
++    async createOne(payload: CreateMealQueueItem) {
++      loading.value = true;
++      const { data } = await api.mealQueue.createOne(payload);
++      if (data) {
++        await this.refreshAll();
++      }
++      loading.value = false;
++      return data;
++    },
++    async updateOne(payload: UpdateMealQueueItem) {
++      loading.value = true;
++      const { data } = await api.mealQueue.updateOne(payload.id, payload);
++      if (data) {
++        await this.refreshAll();
++      }
++      loading.value = false;
++    },
++    async setEaten(id: number, eaten: boolean) {
++      // optimistic update so the checkbox feels instant
++      const item = queueItems.value.find(i => i.id === id);
++      if (item) {
++        item.eaten = eaten;
++      }
++      const { data } = await api.mealQueue.setEaten(id, eaten);
++      if (data && !includeEaten.value && eaten) {
++        queueItems.value = queueItems.value.filter(i => i.id !== id);
++      }
++      return data;
++    },
++    async deleteOne(id: number) {
++      loading.value = true;
++      const { data } = await api.mealQueue.deleteOne(id);
++      if (data) {
++        await this.refreshAll();
++      }
++      loading.value = false;
++    },
++  };
++
++  useAsyncData(useAsyncKey(), async () => {
++    await actions.refreshAll();
++    return true;
++  });
++
++  watch(includeEaten, actions.refreshAll);
++
++  const uneatenItems = computed(() => queueItems.value.filter(i => !i.eaten));
++
++  return { queueItems, uneatenItems, includeEaten, actions, loading };
++};
+diff --git a/frontend/app/lang/messages/en-US.json b/frontend/app/lang/messages/en-US.json
+index 06e0106..12bd9b1 100644
+--- a/frontend/app/lang/messages/en-US.json
++++ b/frontend/app/lang/messages/en-US.json
+@@ -410,7 +410,10 @@
+     "applies-on-days": "Applies on {0}s",
+     "meal-plan-settings": "Meal Plan Settings",
+     "add-all-to-list": "Add All to List",
+-    "add-day-to-list": "Add Day to List"
++    "add-day-to-list": "Add Day to List",
++    "meal-queue": "Meal Queue",
++    "show-eaten": "Show eaten",
++    "meal-queue-empty": "Your meal queue is empty. Add the meals you're planning to cook this week and tick them off as you go."
+   },
+   "migration": {
+     "migration-data-removed": "Migration data removed",
+@@ -1399,7 +1402,6 @@
+       "already-set-up-bring-to-homepage": "I'm already set up, just bring me to the homepage",
+       "common-settings-for-new-sites": "Here are some common settings for new sites",
+       "setup-complete": "Setup Complete!",
+-
+       "ai-providers-description": "Optionally configure AI providers for your group. AI providers enable features like creating recipes from images, importing recipes from videos, and enhanced ingredient parsing. You can always configure this later from your group settings.",
+       "here-are-a-few-things-to-help-you-get-started": "Here are a few things to help you get started with Mealie",
+       "restore-from-v1-backup": "Have a backup from a previous instance of Mealie v1? You can restore it here.",
+diff --git a/frontend/app/lib/api/client-user.ts b/frontend/app/lib/api/client-user.ts
+index 216a78d..bb0db38 100644
+--- a/frontend/app/lib/api/client-user.ts
++++ b/frontend/app/lib/api/client-user.ts
+@@ -13,7 +13,8 @@ import { CookbookAPI } from "./user/group-cookbooks";
+ import { GroupRecipeActionsAPI } from "./user/group-recipe-actions";
+ import { WebhooksAPI } from "./user/group-webhooks";
+ import { RegisterAPI } from "./user/user-registration";
+-import { MealPlanAPI } from "./user/group-mealplan";
++import { MealPlanAPI } from "./user/group-mealplan";
++import { MealQueueAPI } from "./user/meal-queue";
+ import { EmailAPI } from "./user/email";
+ import { BulkActionsAPI } from "./user/recipe-bulk-actions";
+ import { ToolsApi } from "./user/organizer-tools";
+@@ -44,6 +45,7 @@ export class UserApiClient {
+   public register: RegisterAPI;
+   public mealplans: MealPlanAPI;
+   public mealplanRules: MealPlanRulesApi;
++  public mealQueue: MealQueueAPI;
+   public email: EmailAPI;
+   public bulk: BulkActionsAPI;
+   public groupMigration: GroupMigrationApi;
+@@ -75,6 +77,7 @@ export class UserApiClient {
+     this.register = new RegisterAPI(requests);
+     this.mealplans = new MealPlanAPI(requests);
+     this.mealplanRules = new MealPlanRulesApi(requests);
++    this.mealQueue = new MealQueueAPI(requests);
+ 
+     // Group
+     this.groupMigration = new GroupMigrationApi(requests);
+diff --git a/frontend/app/lib/api/types/meal-queue.ts b/frontend/app/lib/api/types/meal-queue.ts
+new file mode 100644
+index 0000000..78bdf06
+--- /dev/null
++++ b/frontend/app/lib/api/types/meal-queue.ts
+@@ -0,0 +1,35 @@
++/* tslint:disable */
++
++/**
++/* Hand-written to mirror mealie/schema/meal_queue/meal_queue.py.
++/* This is a fork-only feature; there is no upstream pydantic2ts export for it.
++*/
++
++import type { RecipeSummary } from "./recipe";
++
++export interface CreateMealQueueItem {
++  title?: string;
++  note?: string;
++  recipeId?: string | null;
++}
++
++export interface UpdateMealQueueItem extends CreateMealQueueItem {
++  id: number;
++  groupId: string;
++  userId?: string | null;
++  eaten?: boolean;
++  eatenAt?: string | null;
++}
++
++export interface ReadMealQueueItem extends UpdateMealQueueItem {
++  householdId: string;
++  recipe?: RecipeSummary | null;
++}
++
++export interface MealQueueItemPagination {
++  page: number;
++  perPage: number;
++  total: number;
++  totalPages: number;
++  items: ReadMealQueueItem[];
++}
+diff --git a/frontend/app/lib/api/user/meal-queue.ts b/frontend/app/lib/api/user/meal-queue.ts
+new file mode 100644
+index 0000000..dbf1b2d
+--- /dev/null
++++ b/frontend/app/lib/api/user/meal-queue.ts
+@@ -0,0 +1,30 @@
++import { BaseCRUDAPI } from "../base/base-clients";
++import type {
++  CreateMealQueueItem,
++  ReadMealQueueItem,
++  UpdateMealQueueItem,
++} from "~/lib/api/types/meal-queue";
++
++const prefix = "/api";
++
++const routes = {
++  mealQueue: `${prefix}/households/meal-queue`,
++  mealQueueId: (id: string | number) => `${prefix}/households/meal-queue/${id}`,
++  mealQueueEaten: (id: string | number) => `${prefix}/households/meal-queue/${id}/eaten`,
++};
++
++export class MealQueueAPI extends BaseCRUDAPI<CreateMealQueueItem, ReadMealQueueItem, UpdateMealQueueItem> {
++  baseRoute = routes.mealQueue;
++  itemRoute = routes.mealQueueId;
++
++  /** List queue entries. Pass `includeEaten: true` to also fetch items already ticked off. */
++  async getAllQueued(includeEaten = false) {
++    return await this.getAll(1, -1, { includeEaten });
++  }
++
++  async setEaten(id: string | number, eaten: boolean) {
++    return await this.requests.put<ReadMealQueueItem>(routes.mealQueueEaten(id), null, {
++      params: { eaten },
++    });
++  }
++}
+diff --git a/frontend/app/pages/household/meal-queue/index.vue b/frontend/app/pages/household/meal-queue/index.vue
+new file mode 100644
+index 0000000..4bf028c
+--- /dev/null
++++ b/frontend/app/pages/household/meal-queue/index.vue
+@@ -0,0 +1,200 @@
++<template>
++  <v-container>
++    <RecipeDialogAddToShoppingList
++      v-if="shoppingLists"
++      v-model="state.shoppingListDialog"
++      :recipes="uneatenRecipesWithScales"
++      :shopping-lists="shoppingLists"
++    />
++
++    <BaseDialog
++      v-model="state.addDialog"
++      :title="$t('meal-plan.create-a-new-meal-plan')"
++      :submit-text="$t('general.create')"
++      color="primary"
++      :icon="$globals.icons.foods"
++      :submit-disabled="isCreateDisabled"
++      can-submit
++      @submit="createAndReset"
++      @close="resetNewItem"
++    >
++      <v-card-text class="pb-0">
++        <v-autocomplete
++          v-if="!noteOnly"
++          v-model="newItem.recipeId"
++          v-model:search="search.query.value"
++          :label="$t('meal-plan.meal-recipe')"
++          :items="search.data.value"
++          :custom-filter="normalizeFilter"
++          :loading="search.loading.value"
++          cache-items
++          item-title="name"
++          item-value="id"
++          :return-object="false"
++        />
++        <template v-else>
++          <v-text-field v-model="newItem.title" :label="$t('meal-plan.meal-title')" />
++        </template>
++        <v-textarea v-model="newItem.note" rows="2" :label="$t('meal-plan.meal-note')" />
++      </v-card-text>
++      <v-card-actions class="py-0 px-4">
++        <v-switch v-model="noteOnly" class="mt-n3 mb-n4" :label="$t('meal-plan.note-only')" />
++      </v-card-actions>
++    </BaseDialog>
++
++    <div class="d-flex flex-wrap align-center justify-space-between mb-2">
++      <h1 class="text-h5">
++        {{ $t('meal-plan.meal-queue') }}
++      </h1>
++      <div class="d-flex ml-auto">
++        <v-checkbox
++          v-model="includeEaten"
++          hide-details
++          :label="$t('meal-plan.show-eaten')"
++          class="my-auto mr-4"
++        />
++        <BaseButton
++          color="info"
++          :icon="$globals.icons.cartCheck"
++          :text="$t('meal-plan.add-all-to-list')"
++          :disabled="!hasUneatenRecipes"
++          :loading="state.addAllLoading"
++          class="mr-2"
++          @click="openShoppingListDialog"
++        />
++        <BaseButton
++          color="primary"
++          :icon="$globals.icons.foods"
++          :text="$t('general.create')"
++          @click="state.addDialog = true"
++        />
++      </div>
++    </div>
++
++    <v-alert v-if="!loading && queueItems.length === 0" type="info" variant="tonal">
++      {{ $t('meal-plan.meal-queue-empty') }}
++    </v-alert>
++
++    <v-row>
++      <v-col
++        v-for="item in queueItems"
++        :key="item.id"
++        cols="12"
++        sm="6"
++        md="4"
++        lg="3"
++      >
++        <v-card :class="{ 'left-color-border': !item.eaten }" :variant="item.eaten ? 'tonal' : 'elevated'">
++          <div class="d-flex align-center pa-2">
++            <v-checkbox
++              :model-value="item.eaten"
++              hide-details
++              class="flex-grow-0 mr-1"
++              @update:model-value="(val) => actions.setEaten(item.id, !!val)"
++            />
++            <RecipeCardImage
++              v-if="item.recipe"
++              :recipe-id="item.recipe.id!"
++              small
++              height="60"
++              :slug="item.recipe.slug"
++              class="mr-2"
++            />
++            <div class="flex-grow-1" :style="item.eaten ? 'text-decoration: line-through; opacity: 0.6;' : ''">
++              <div class="font-weight-medium">
++                {{ item.recipe ? item.recipe.name : item.title }}
++              </div>
++              <div v-if="item.note" class="text-caption text-medium-emphasis">
++                {{ item.note }}
++              </div>
++            </div>
++            <v-btn icon variant="text" size="small" @click="actions.deleteOne(item.id)">
++              <v-icon>{{ $globals.icons.delete }}</v-icon>
++            </v-btn>
++          </div>
++        </v-card>
++      </v-col>
++    </v-row>
++  </v-container>
++</template>
++
++<script setup lang="ts">
++import RecipeCardImage from "~/components/Domain/Recipe/RecipeCardImage.vue";
++import RecipeDialogAddToShoppingList from "~/components/Domain/Recipe/RecipeDialogAddToShoppingList.vue";
++import { useMealQueue } from "~/composables/use-meal-queue";
++import { useRecipeSearch } from "~/composables/recipes/use-recipe-search";
++import { normalizeFilter } from "~/composables/use-utils";
++import { useUserApi } from "~/composables/api";
++import type { ShoppingListSummary } from "~/lib/api/types/household";
++
++const i18n = useI18n();
++const api = useUserApi();
++
++useSeoMeta({
++  title: i18n.t("meal-plan.meal-queue"),
++});
++
++const { queueItems, uneatenItems, includeEaten, actions, loading } = useMealQueue();
++
++const search = useRecipeSearch(api);
++const noteOnly = ref(false);
++
++const newItem = ref({
++  title: "",
++  note: "",
++  recipeId: undefined as string | undefined,
++});
++
++const state = ref({
++  addDialog: false,
++  shoppingListDialog: false,
++  addAllLoading: false,
++});
++
++const isCreateDisabled = computed(() => {
++  if (noteOnly.value) {
++    return !newItem.value.title;
++  }
++  return !newItem.value.recipeId;
++});
++
++function resetNewItem() {
++  newItem.value = { title: "", note: "", recipeId: undefined };
++  noteOnly.value = false;
++}
++
++async function createAndReset() {
++  await actions.createOne({ ...newItem.value });
++  resetNewItem();
++}
++
++const hasUneatenRecipes = computed(() => uneatenItems.value.some(item => !!item.recipe));
++
++const uneatenRecipesWithScales = computed(() => {
++  return uneatenItems.value
++    .filter(item => !!item.recipe)
++    .map(item => ({ scale: 1, ...item.recipe! }));
++});
++
++const shoppingLists = ref<ShoppingListSummary[]>();
++
++async function getShoppingLists() {
++  const { data } = await api.shopping.lists.getAll(1, -1, { orderBy: "name", orderDirection: "asc" });
++  if (data) {
++    shoppingLists.value = (data.items as ShoppingListSummary[]) ?? [];
++  }
++}
++
++async function openShoppingListDialog() {
++  state.value.addAllLoading = true;
++  await getShoppingLists();
++  state.value.shoppingListDialog = true;
++  state.value.addAllLoading = false;
++}
++</script>
++
++<style scoped>
++.left-color-border {
++  border-left: 5px solid rgb(var(--v-theme-primary)) !important;
++}
++</style>
+diff --git a/mealie/alembic/versions/2026-07-08-00.00.00_a1b2c3meaLq_add_meal_queue_items.py b/mealie/alembic/versions/2026-07-08-00.00.00_a1b2c3meaLq_add_meal_queue_items.py
+new file mode 100644
+index 0000000..d67951c
+--- /dev/null
++++ b/mealie/alembic/versions/2026-07-08-00.00.00_a1b2c3meaLq_add_meal_queue_items.py
+@@ -0,0 +1,59 @@
++"""add meal queue items table (meal-queue fork feature)
++
++Revision ID: a1b2c3meaLq
++Revises: 2187537c52b8
++Create Date: 2026-07-08 00:00:00.000000
++
++"""
++
++import sqlalchemy as sa
++
++import mealie.db.migration_types
++from alembic import op
++
++# revision identifiers, used by Alembic.
++revision = "a1b2c3meaLq"
++down_revision = "2187537c52b8"
++branch_labels: str | tuple[str, ...] | None = None
++depends_on: str | tuple[str, ...] | None = None
++
++
++def upgrade():
++    op.create_table(
++        "meal_queue_items",
++        sa.Column("id", sa.Integer(), nullable=False),
++        sa.Column("created_at", mealie.db.migration_types.NaiveDateTime(), nullable=True),
++        sa.Column("update_at", mealie.db.migration_types.NaiveDateTime(), nullable=True),
++        sa.Column("group_id", mealie.db.migration_types.GUID(), nullable=False),
++        sa.Column("household_id", mealie.db.migration_types.GUID(), nullable=False),
++        sa.Column("user_id", mealie.db.migration_types.GUID(), nullable=True),
++        sa.Column("recipe_id", mealie.db.migration_types.GUID(), nullable=True),
++        sa.Column("title", sa.String(), nullable=False),
++        sa.Column("note", sa.String(), nullable=False),
++        sa.Column("eaten", sa.Boolean(), nullable=False),
++        sa.Column("eaten_at", mealie.db.migration_types.NaiveDateTime(), nullable=True),
++        sa.ForeignKeyConstraint(["group_id"], ["groups.id"], name="fk_meal_queue_items_group_id"),
++        sa.ForeignKeyConstraint(["household_id"], ["households.id"], name="fk_meal_queue_items_household_id"),
++        sa.ForeignKeyConstraint(["user_id"], ["users.id"], name="fk_meal_queue_items_user_id"),
++        sa.ForeignKeyConstraint(["recipe_id"], ["recipes.id"], name="fk_meal_queue_items_recipe_id"),
++        sa.PrimaryKeyConstraint("id"),
++    )
++    with op.batch_alter_table("meal_queue_items", schema=None) as batch_op:
++        batch_op.create_index(batch_op.f("ix_meal_queue_items_group_id"), ["group_id"], unique=False)
++        batch_op.create_index(batch_op.f("ix_meal_queue_items_household_id"), ["household_id"], unique=False)
++        batch_op.create_index(batch_op.f("ix_meal_queue_items_user_id"), ["user_id"], unique=False)
++        batch_op.create_index(batch_op.f("ix_meal_queue_items_recipe_id"), ["recipe_id"], unique=False)
++        batch_op.create_index(batch_op.f("ix_meal_queue_items_eaten"), ["eaten"], unique=False)
++        batch_op.create_index(batch_op.f("ix_meal_queue_items_created_at"), ["created_at"], unique=False)
++
++
++def downgrade():
++    with op.batch_alter_table("meal_queue_items", schema=None) as batch_op:
++        batch_op.drop_index(batch_op.f("ix_meal_queue_items_created_at"))
++        batch_op.drop_index(batch_op.f("ix_meal_queue_items_eaten"))
++        batch_op.drop_index(batch_op.f("ix_meal_queue_items_recipe_id"))
++        batch_op.drop_index(batch_op.f("ix_meal_queue_items_user_id"))
++        batch_op.drop_index(batch_op.f("ix_meal_queue_items_household_id"))
++        batch_op.drop_index(batch_op.f("ix_meal_queue_items_group_id"))
++
++    op.drop_table("meal_queue_items")
+diff --git a/mealie/db/models/household/__init__.py b/mealie/db/models/household/__init__.py
+index 8cc38c8..ac72f8e 100644
+--- a/mealie/db/models/household/__init__.py
++++ b/mealie/db/models/household/__init__.py
+@@ -3,6 +3,7 @@ from .events import GroupEventNotifierModel, GroupEventNotifierOptionsModel
+ from .household import Household
+ from .household_to_recipe import HouseholdToRecipe
+ from .invite_tokens import GroupInviteToken
++from .meal_queue import MealQueueItem
+ from .mealplan import GroupMealPlan, GroupMealPlanRules
+ from .preferences import HouseholdPreferencesModel
+ from .recipe_action import GroupRecipeAction
+@@ -26,6 +27,7 @@ __all__ = [
+     "Household",
+     "HouseholdPreferencesModel",
+     "HouseholdToRecipe",
++    "MealQueueItem",
+     "GroupRecipeAction",
+     "ShoppingList",
+     "ShoppingListExtras",
+diff --git a/mealie/db/models/household/meal_queue.py b/mealie/db/models/household/meal_queue.py
+new file mode 100644
+index 0000000..74c8355
+--- /dev/null
++++ b/mealie/db/models/household/meal_queue.py
+@@ -0,0 +1,51 @@
++import datetime
++from typing import TYPE_CHECKING, Optional
++
++from sqlalchemy import Boolean, ForeignKey, String, orm
++from sqlalchemy.orm import Mapped, mapped_column
++
++from .._model_base import BaseMixins, FilterableColumn, SqlAlchemyBase
++from .._model_utils.auto_init import auto_init
++from .._model_utils.datetime import NaiveDateTime
++from .._model_utils.guid import GUID
++
++if TYPE_CHECKING:
++    from ..recipe import RecipeModel
++
++
++class MealQueueItem(SqlAlchemyBase, BaseMixins):
++    """
++    A simple, undated "meal queue" (a.k.a. meal backlog).
++
++    Unlike `GroupMealPlan`, entries here are NOT tied to a calendar date. They represent
++    meals the household has decided to make "at some point soon" without committing to a
++    specific day. Entries are consumed (ticked off) whenever they're actually cooked/eaten,
++    and any remaining ("uneaten") entries can be bulk-added to a shopping list.
++
++    This model intentionally stores `group_id` / `household_id` / `user_id` directly
++    (denormalized) rather than deriving them via association proxies through the `User`
++    model, so this feature can live entirely in its own file(s) without requiring changes
++    to `User`/`Group`/`RecipeModel` relationships. This keeps the fork's diff against
++    upstream mealie small and easy to carry forward across upgrades.
++    """
++
++    __tablename__ = "meal_queue_items"
++
++    group_id: FilterableColumn[GUID] = mapped_column(GUID, ForeignKey("groups.id"), nullable=False, index=True)
++    household_id: FilterableColumn[GUID] = mapped_column(
++        GUID, ForeignKey("households.id"), nullable=False, index=True
++    )
++    user_id: FilterableColumn[GUID | None] = mapped_column(GUID, ForeignKey("users.id"), index=True)
++
++    recipe_id: FilterableColumn[GUID | None] = mapped_column(GUID, ForeignKey("recipes.id"), index=True)
++    recipe: Mapped[Optional["RecipeModel"]] = orm.relationship("RecipeModel", uselist=False, viewonly=True)
++
++    title: FilterableColumn[str] = mapped_column(String, nullable=False, default="")
++    note: FilterableColumn[str] = mapped_column(String, nullable=False, default="")
++
++    eaten: FilterableColumn[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
++    eaten_at: FilterableColumn[datetime.datetime | None] = mapped_column(NaiveDateTime, nullable=True)
++
++    @auto_init()
++    def __init__(self, **_) -> None:
++        pass
+diff --git a/mealie/repos/repository_factory.py b/mealie/repos/repository_factory.py
+index 13d5461..7079212 100644
+--- a/mealie/repos/repository_factory.py
++++ b/mealie/repos/repository_factory.py
+@@ -15,6 +15,7 @@ from mealie.db.models.household.events import GroupEventNotifierModel
+ from mealie.db.models.household.household import Household
+ from mealie.db.models.household.household_to_recipe import HouseholdToRecipe
+ from mealie.db.models.household.invite_tokens import GroupInviteToken
++from mealie.db.models.household.meal_queue import MealQueueItem
+ from mealie.db.models.household.mealplan import GroupMealPlan, GroupMealPlanRules
+ from mealie.db.models.household.preferences import HouseholdPreferencesModel
+ from mealie.db.models.household.recipe_action import GroupRecipeAction
+@@ -64,6 +65,7 @@ from mealie.schema.household.webhook import ReadWebhook
+ from mealie.schema.labels import MultiPurposeLabelOut
+ from mealie.schema.meal_plan.new_meal import ReadPlanEntry
+ from mealie.schema.meal_plan.plan_rules import PlanRulesOut
++from mealie.schema.meal_queue import ReadMealQueueItem
+ from mealie.schema.recipe import Recipe, RecipeCommentOut, RecipeToolOut
+ from mealie.schema.recipe.recipe_category import CategoryOut, TagOut
+ from mealie.schema.recipe.recipe_ingredient import IngredientFood, IngredientUnit
+@@ -77,6 +79,7 @@ from mealie.schema.user.user_passwords import PrivatePasswordResetToken
+ from ._utils import NOT_SET, NotSet
+ from .repository_generic import GroupRepositoryGeneric, HouseholdRepositoryGeneric
+ from .repository_group import RepositoryGroup
++from .repository_meal_queue import RepositoryMealQueue
+ from .repository_meals import RepositoryMeals
+ from .repository_recipes import RepositoryRecipes
+ from .repository_shopping_list import RepositoryShoppingList
+@@ -300,6 +303,21 @@ class AllRepositories:
+             self.session, PK_ID, GroupMealPlan, ReadPlanEntry, group_id=self.group_id, household_id=self.household_id
+         )
+ 
++    @cached_property
++    def meal_queue(self) -> RepositoryMealQueue:
++        """
++        The "meal queue" is a fork-only feature: an undated backlog of meals the household
++        plans to cook, independent of the date-based meal planner/calendar.
++        """
++        return RepositoryMealQueue(
++            self.session,
++            PK_ID,
++            MealQueueItem,
++            ReadMealQueueItem,
++            group_id=self.group_id,
++            household_id=self.household_id,
++        )
++
+     @cached_property
+     def group_meal_plan_rules(self) -> RepositoryMealPlanRules:
+         return RepositoryMealPlanRules(
+diff --git a/mealie/repos/repository_meal_queue.py b/mealie/repos/repository_meal_queue.py
+new file mode 100644
+index 0000000..5c1c15a
+--- /dev/null
++++ b/mealie/repos/repository_meal_queue.py
+@@ -0,0 +1,21 @@
++from datetime import UTC, datetime
++
++from mealie.db.models.household import MealQueueItem
++from mealie.schema.meal_queue import ReadMealQueueItem
++
++from .repository_generic import HouseholdRepositoryGeneric
++
++
++class RepositoryMealQueue(HouseholdRepositoryGeneric[ReadMealQueueItem, MealQueueItem]):
++    def set_eaten(self, item_id: int, eaten: bool) -> ReadMealQueueItem:
++        """Mark a meal queue entry as eaten (or un-eaten), stamping/clearing `eaten_at`."""
++        return self.update(
++            item_id,
++            {"eaten": eaten, "eaten_at": datetime.now(UTC) if eaten else None},
++        )
++
++    def get_uneaten(self) -> list[ReadMealQueueItem]:
++        if not self.household_id:
++            raise Exception("household_id not set")
++
++        return self.multi_query({"eaten": False}, order_by="created_at")
+diff --git a/mealie/routes/households/__init__.py b/mealie/routes/households/__init__.py
+index f1ba7d5..985ed16 100644
+--- a/mealie/routes/households/__init__.py
++++ b/mealie/routes/households/__init__.py
+@@ -6,6 +6,7 @@ from . import (
+     controller_group_recipe_actions,
+     controller_household_self_service,
+     controller_invitations,
++    controller_meal_queue,
+     controller_mealplan,
+     controller_mealplan_rules,
+     controller_shopping_lists,
+@@ -23,6 +24,9 @@ router.include_router(controller_shopping_lists.router)
+ router.include_router(controller_shopping_lists.item_router)
+ router.include_router(controller_webhooks.router)
+ 
++# Meal Queue is a fork-only, additive feature. See controller_meal_queue.py for details.
++router.include_router(controller_meal_queue.router)
++
+ # mealplan_rules must be added before mealplan due to the way the routes are defined
+ router.include_router(controller_mealplan_rules.router)
+ router.include_router(controller_mealplan.router)
+diff --git a/mealie/routes/households/controller_meal_queue.py b/mealie/routes/households/controller_meal_queue.py
+new file mode 100644
+index 0000000..0b5c104
+--- /dev/null
++++ b/mealie/routes/households/controller_meal_queue.py
+@@ -0,0 +1,93 @@
++from functools import cached_property
++
++from fastapi import APIRouter, Depends
++
++from mealie.core.exceptions import mealie_registered_exceptions
++from mealie.repos.repository_meal_queue import RepositoryMealQueue
++from mealie.routes._base import controller
++from mealie.routes._base.base_controllers import BaseCrudController
++from mealie.routes._base.mixins import HttpRepo
++from mealie.schema import mapper
++from mealie.schema.meal_queue import (
++    CreateMealQueueItem,
++    MealQueueItemPagination,
++    ReadMealQueueItem,
++    SaveMealQueueItem,
++    UpdateMealQueueItem,
++)
++from mealie.schema.response.pagination import PaginationQuery
++
++router = APIRouter(prefix="/households/meal-queue", tags=["Households: Meal Queue"])
++
++
++@controller(router)
++class MealQueueController(BaseCrudController):
++    """
++    The "meal queue" is an undated backlog of meals ("what we're cooking this week"),
++    separate from the date-based meal planner/calendar. This entire controller (and the
++    model/schema/repo it depends on) is additive: it does not modify any existing mealie
++    route, so it can be dropped in/out of a fork with minimal merge conflicts.
++    """
++
++    @cached_property
++    def repo(self) -> RepositoryMealQueue:
++        return self.repos.meal_queue
++
++    def registered_exceptions(self, ex: type[Exception]) -> str:
++        registered = {
++            **mealie_registered_exceptions(self.translator),
++        }
++        return registered.get(ex, self.t("generic.server-error"))
++
++    @cached_property
++    def mixins(self):
++        return HttpRepo[CreateMealQueueItem, ReadMealQueueItem, UpdateMealQueueItem](
++            self.repo,
++            self.logger,
++            self.registered_exceptions,
++        )
++
++    @router.get("", response_model=MealQueueItemPagination)
++    def get_all(
++        self,
++        q: PaginationQuery = Depends(PaginationQuery),
++        include_eaten: bool = False,
++    ):
++        """List the household's meal queue. By default only un-eaten entries are returned."""
++        if not include_eaten:
++            eaten_filter = "eaten = false"
++            q.query_filter = f"({q.query_filter}) AND ({eaten_filter})" if q.query_filter else eaten_filter
++
++        if not q.order_by:
++            q.order_by = "created_at"
++
++        return self.repo.page_all(pagination=q)
++
++    @router.post("", response_model=ReadMealQueueItem, status_code=201)
++    def create_one(self, data: CreateMealQueueItem):
++        """Add a new entry to the queue. Provide either `recipe_id` or a freeform `title`."""
++        save_data = mapper.cast(
++            data,
++            SaveMealQueueItem,
++            group_id=self.group_id,
++            household_id=self.household_id,
++            user_id=self.user.id,
++        )
++        return self.mixins.create_one(save_data)
++
++    @router.get("/{item_id}", response_model=ReadMealQueueItem)
++    def get_one(self, item_id: int):
++        return self.mixins.get_one(item_id)
++
++    @router.put("/{item_id}", response_model=ReadMealQueueItem)
++    def update_one(self, item_id: int, data: UpdateMealQueueItem):
++        return self.mixins.update_one(data, item_id)
++
++    @router.put("/{item_id}/eaten", response_model=ReadMealQueueItem)
++    def set_eaten(self, item_id: int, eaten: bool = True):
++        """Tick an entry off the queue (or un-tick it) without needing the full payload."""
++        return self.repo.set_eaten(item_id, eaten)
++
++    @router.delete("/{item_id}", response_model=ReadMealQueueItem)
++    def delete_one(self, item_id: int):
++        return self.mixins.delete_one(item_id)
+diff --git a/mealie/schema/meal_queue/__init__.py b/mealie/schema/meal_queue/__init__.py
+new file mode 100644
+index 0000000..673b690
+--- /dev/null
++++ b/mealie/schema/meal_queue/__init__.py
+@@ -0,0 +1,15 @@
++from .meal_queue import (
++    CreateMealQueueItem,
++    MealQueueItemPagination,
++    ReadMealQueueItem,
++    SaveMealQueueItem,
++    UpdateMealQueueItem,
++)
++
++__all__ = [
++    "CreateMealQueueItem",
++    "MealQueueItemPagination",
++    "ReadMealQueueItem",
++    "SaveMealQueueItem",
++    "UpdateMealQueueItem",
++]
+diff --git a/mealie/schema/meal_queue/meal_queue.py b/mealie/schema/meal_queue/meal_queue.py
+new file mode 100644
+index 0000000..b4ac1ff
+--- /dev/null
++++ b/mealie/schema/meal_queue/meal_queue.py
+@@ -0,0 +1,66 @@
++from datetime import datetime
++from typing import Annotated
++from uuid import UUID
++
++from pydantic import ConfigDict, Field, field_validator
++from pydantic_core.core_schema import ValidationInfo
++from sqlalchemy.orm import selectinload
++from sqlalchemy.orm.interfaces import LoaderOption
++
++from mealie.db.models.household import MealQueueItem
++from mealie.db.models.recipe import RecipeModel
++from mealie.schema._mealie import MealieModel
++from mealie.schema.recipe.recipe import RecipeSummary
++from mealie.schema.response.pagination import PaginationBase
++
++
++class CreateMealQueueItem(MealieModel):
++    """
++    Add an entry to the household's meal queue. Either `recipe_id` or `title` must be
++    provided (mirrors the same "recipe OR freeform title" pattern used by mealplan entries).
++    """
++
++    title: str = ""
++    note: str = ""
++    recipe_id: Annotated[UUID | None, Field(validate_default=True)] = None
++
++    @field_validator("recipe_id")
++    @classmethod
++    def id_or_title(cls, value, info: ValidationInfo):
++        if bool(value) is False and bool(info.data.get("title")) is False:
++            raise ValueError(f"`recipe_id={value}` or `title={info.data.get('title')}` must be provided")
++
++        return value
++
++
++class UpdateMealQueueItem(CreateMealQueueItem):
++    id: int
++    group_id: UUID
++    user_id: UUID | None = None
++    eaten: bool = False
++    eaten_at: datetime | None = None
++
++
++class SaveMealQueueItem(CreateMealQueueItem):
++    group_id: UUID
++    household_id: UUID
++    user_id: UUID | None = None
++    model_config = ConfigDict(from_attributes=True)
++
++
++class ReadMealQueueItem(UpdateMealQueueItem):
++    household_id: UUID
++    recipe: RecipeSummary | None = None
++    model_config = ConfigDict(from_attributes=True)
++
++    @classmethod
++    def loader_options(cls) -> list[LoaderOption]:
++        return [
++            selectinload(MealQueueItem.recipe).joinedload(RecipeModel.recipe_category),
++            selectinload(MealQueueItem.recipe).joinedload(RecipeModel.tags),
++            selectinload(MealQueueItem.recipe).joinedload(RecipeModel.tools),
++        ]
++
++
++class MealQueueItemPagination(PaginationBase):
++    items: list[ReadMealQueueItem]
+-- 
+2.43.0
+

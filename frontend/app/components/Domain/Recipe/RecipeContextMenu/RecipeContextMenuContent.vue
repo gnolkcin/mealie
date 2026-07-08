@@ -120,6 +120,7 @@ export interface ContextMenuIncludes {
   download: boolean;
   duplicate: boolean;
   mealplanner: boolean;
+  mealQueue: boolean;
   shoppingList: boolean;
   print: boolean;
   printPreferences: boolean;
@@ -156,6 +157,7 @@ const props = withDefaults(defineProps<Props>(), {
     download: true,
     duplicate: false,
     mealplanner: true,
+    mealQueue: true,
     shoppingList: true,
     print: true,
     printPreferences: true,
@@ -250,6 +252,13 @@ const defaultItems: { [key: string]: ContextMenuItem } = {
     icon: $globals.icons.calendar,
     color: undefined,
     event: "mealplanner",
+    isPublic: false,
+  },
+  mealQueue: {
+    title: i18n.t("recipe.add-to-queue"),
+    icon: $globals.icons.potSteam,
+    color: undefined,
+    event: "mealQueue",
     isPublic: false,
   },
   shoppingList: {
@@ -387,6 +396,19 @@ async function addRecipeToPlan() {
   }
 }
 
+async function addRecipeToQueue() {
+  const { response } = await api.mealQueue.createOne({
+    recipeId: props.recipeId,
+  });
+
+  if (response?.status === 201) {
+    alert.success(i18n.t("recipe.recipe-added-to-queue") as string);
+  }
+  else {
+    alert.error(i18n.t("recipe.failed-to-add-recipe-to-queue") as string);
+  }
+}
+
 async function duplicateRecipe() {
   const { data } = await api.recipes.duplicateOne(props.slug, recipeName.value);
   if (data && data.slug) {
@@ -408,6 +430,7 @@ const eventHandlers: { [key: string]: () => void | Promise<any> } = {
   mealplanner: () => {
     mealplannerDialog.value = true;
   },
+  mealQueue: addRecipeToQueue,
   printPreferences: async () => {
     if (!recipeRef.value) {
       await refreshRecipe();

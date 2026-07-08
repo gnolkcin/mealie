@@ -52,6 +52,7 @@ interface ContextMenuIncludes {
   download?: boolean;
   duplicate?: boolean;
   mealplanner?: boolean;
+  mealQueue?: boolean;
   shoppingList?: boolean;
   print?: boolean;
   printPreferences?: boolean;
@@ -89,6 +90,7 @@ const props = withDefaults(defineProps<Props>(), {
     download: true,
     duplicate: false,
     mealplanner: true,
+    mealQueue: true,
     shoppingList: true,
     print: true,
     printPreferences: true,

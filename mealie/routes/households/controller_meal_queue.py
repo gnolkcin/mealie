@@ -1,6 +1,6 @@
 from functools import cached_property
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from mealie.core.exceptions import mealie_registered_exceptions
 from mealie.repos.repository_meal_queue import RepositoryMealQueue
@@ -51,7 +51,11 @@ class MealQueueController(BaseCrudController):
     def get_all(
         self,
         q: PaginationQuery = Depends(PaginationQuery),
-        include_eaten: bool = False,
+        # The frontend api client sends camelCase query params (`includeEaten`), matching the rest
+        # of the mealie API surface (pydantic models camelize automatically, but this is a bare
+        # FastAPI param, so it needs an explicit alias). Without this alias the param was silently
+        # ignored and eaten items could never be shown ("show eaten" toggle bug).
+        include_eaten: bool = Query(False, alias="includeEaten"),
     ):
         """List the household's meal queue. By default only un-eaten entries are returned."""
         if not include_eaten:
@@ -87,6 +91,13 @@ class MealQueueController(BaseCrudController):
     def set_eaten(self, item_id: int, eaten: bool = True):
         """Tick an entry off the queue (or un-tick it) without needing the full payload."""
         return self.repo.set_eaten(item_id, eaten)
+
+    # NOTE: this static route MUST be registered before the dynamic `/{item_id}` DELETE route
+    # below, otherwise FastAPI would try (and fail) to parse "eaten" as an int item_id.
+    @router.delete("/eaten", response_model=list[ReadMealQueueItem])
+    def clear_eaten(self):
+        """Remove every entry that has already been ticked off ("eaten") from the queue."""
+        return self.repo.clear_eaten()
 
     @router.delete("/{item_id}", response_model=ReadMealQueueItem)
     def delete_one(self, item_id: int):

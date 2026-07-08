@@ -14,6 +14,17 @@ class RepositoryMealQueue(HouseholdRepositoryGeneric[ReadMealQueueItem, MealQueu
             {"eaten": eaten, "eaten_at": datetime.now(UTC) if eaten else None},
         )
 
+    def clear_eaten(self) -> list[ReadMealQueueItem]:
+        """Delete all eaten entries for this household, returning the deleted items."""
+        if not self.household_id:
+            raise Exception("household_id not set")
+
+        eaten_items = self.multi_query({"eaten": True})
+        if not eaten_items:
+            return []
+
+        return self.delete_many([item.id for item in eaten_items])
+
     def get_uneaten(self) -> list[ReadMealQueueItem]:
         if not self.household_id:
             raise Exception("household_id not set")

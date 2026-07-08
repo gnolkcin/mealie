@@ -108,6 +108,7 @@
                   edit: false,
                   download: true,
                   mealplanner: true,
+                  mealQueue: true,
                   shoppingList: true,
                   print: false,
                   printPreferences: false,
