@@ -329,6 +329,9 @@
     "randomize-recipe": "Randomize Recipe",
     "meal-queue": "Meal Queue",
     "show-eaten": "Show eaten",
+    "clear-eaten": "Clear Eaten",
+    "clear-eaten-confirmation": "Are you sure you want to remove all eaten meals from the queue?",
+    "no-recipes-found-for-random": "No recipes found to add a random meal",
     "meal-queue-empty": "Your meal queue is empty. Add the meals you're planning to cook this week and tick them off as you go."
   },
   "migration": {
@@ -474,9 +477,12 @@
     "entry-type": "Entry Type",
     "add-to-list": "Add to List",
     "add-to-plan": "Add to Plan",
+    "add-to-queue": "Add to Queue",
     "add-to-timeline": "Add to Timeline",
     "successfully-added-to-list": "Successfully added to list",
     "recipe-added-to-mealplan": "Recipe added to meal plan",
+    "recipe-added-to-queue": "Recipe added to meal queue",
+    "failed-to-add-recipe-to-queue": "Failed to add recipe to meal queue",
     "failed-to-add-recipes-to-list": "Failed to add recipe to list",
     "failed-to-add-recipe-to-mealplan": "Failed to add recipe to meal plan",
     "yield": "Yield",

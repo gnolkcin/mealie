@@ -79,6 +79,7 @@ const props = withDefaults(defineProps<Props>(), {
     download: true,
     duplicate: false,
     mealplanner: true,
+    mealQueue: true,
     shoppingList: true,
     print: true,
     printPreferences: true,

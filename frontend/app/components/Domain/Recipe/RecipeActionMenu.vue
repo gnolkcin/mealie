@@ -69,6 +69,7 @@
           download: loggedIn,
           duplicate: loggedIn,
           mealplanner: loggedIn,
+          mealQueue: loggedIn,
           shoppingList: loggedIn,
           print: true,
           printPreferences: true,
