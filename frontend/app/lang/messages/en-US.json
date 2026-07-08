@@ -326,7 +326,10 @@
     "meal-plan-settings": "Meal Plan Settings",
     "add-all-to-list": "Add All to List",
     "add-day-to-list": "Add Day to List",
-    "randomize-recipe": "Randomize Recipe"
+    "randomize-recipe": "Randomize Recipe",
+    "meal-queue": "Meal Queue",
+    "show-eaten": "Show eaten",
+    "meal-queue-empty": "Your meal queue is empty. Add the meals you're planning to cook this week and tick them off as you go."
   },
   "migration": {
     "new-migration": "New Migration",
