@@ -159,7 +159,7 @@
                 >
                   {{ item.recipe ? item.recipe.name : item.title }}
                 </component>
-                <div v-if="item.note" class="text-caption text-medium-emphasis">
+                <div v-if="item.note" class="text-caption text-medium-emphasis queue-card-note">
                   {{ item.note }}
                 </div>
               </div>
@@ -309,7 +309,21 @@ async function openShoppingListDialog() {
 .queue-card-title {
   color: inherit;
   text-decoration: none;
-  display: block;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.queue-card-note {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
 }
 
 .queue-card-title:hover {

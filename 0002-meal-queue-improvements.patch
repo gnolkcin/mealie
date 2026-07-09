@@ -1,4 +1,4 @@
-From 9e13c842d924bc539499e8ea0d1dbac6ac585613 Mon Sep 17 00:00:00 2001
+From 7925edbdf9733cbb4f3c052393749267fc5bc0b2 Mon Sep 17 00:00:00 2001
 From: Fork Author <fork@example.com>
 Date: Wed, 8 Jul 2026 15:59:04 +0000
 Subject: [PATCH] feat: meal queue improvements
@@ -30,15 +30,15 @@ Subject: [PATCH] feat: meal queue improvements
  .../components/Domain/Recipe/RecipeCard.vue   |   1 +
  .../Domain/Recipe/RecipeCardMobile.vue        |   1 +
  .../RecipeContextMenu/RecipeContextMenu.vue   |   2 +
- .../RecipeContextMenuContent.vue              |  23 +++
+ .../RecipeContextMenuContent.vue              |  23 ++
  frontend/app/composables/use-meal-queue.ts    |  38 ++++
  frontend/app/lang/messages/en-US.json         |   6 +
  frontend/app/lib/api/user/meal-queue.ts       |  12 +-
- .../app/pages/household/meal-queue/index.vue  | 186 +++++++++++++++---
- mealie/repos/repository_meal_queue.py         |  11 ++
+ .../app/pages/household/meal-queue/index.vue  | 202 +++++++++++++++---
+ mealie/repos/repository_meal_queue.py         |  11 +
  .../households/controller_meal_queue.py       |  15 +-
  .../test_meal_queue_improvements.py           |  53 +++++
- 12 files changed, 317 insertions(+), 32 deletions(-)
+ 12 files changed, 333 insertions(+), 32 deletions(-)
  create mode 100644 tests/integration_tests/user_household_tests/test_meal_queue_improvements.py
 
 diff --git a/frontend/app/components/Domain/Recipe/RecipeActionMenu.vue b/frontend/app/components/Domain/Recipe/RecipeActionMenu.vue
@@ -273,7 +273,7 @@ index dbf1b2d..aa56d90 100644
      });
    }
 diff --git a/frontend/app/pages/household/meal-queue/index.vue b/frontend/app/pages/household/meal-queue/index.vue
-index 4bf028c..836d98c 100644
+index 4bf028c..5c2dedd 100644
 --- a/frontend/app/pages/household/meal-queue/index.vue
 +++ b/frontend/app/pages/household/meal-queue/index.vue
 @@ -42,17 +42,38 @@
@@ -407,7 +407,7 @@ index 4bf028c..836d98c 100644
 +                >
 +                  {{ item.recipe ? item.recipe.name : item.title }}
 +                </component>
-+                <div v-if="item.note" class="text-caption text-medium-emphasis">
++                <div v-if="item.note" class="text-caption text-medium-emphasis queue-card-note">
 +                  {{ item.note }}
 +                </div>
                </div>
@@ -490,7 +490,7 @@ index 4bf028c..836d98c 100644
  const hasUneatenRecipes = computed(() => uneatenItems.value.some(item => !!item.recipe));
  
  const uneatenRecipesWithScales = computed(() => {
-@@ -197,4 +289,44 @@ async function openShoppingListDialog() {
+@@ -197,4 +289,60 @@ async function openShoppingListDialog() {
  .left-color-border {
    border-left: 5px solid rgb(var(--v-theme-primary)) !important;
  }
@@ -528,7 +528,23 @@ index 4bf028c..836d98c 100644
 +.queue-card-title {
 +  color: inherit;
 +  text-decoration: none;
-+  display: block;
++  /* Clamp long recipe names to two lines with an ellipsis instead of
++     letting them wrap indefinitely and stretch the card vertically. */
++  display: -webkit-box;
++  -webkit-box-orient: vertical;
++  -webkit-line-clamp: 2;
++  line-clamp: 2;
++  overflow: hidden;
++  overflow-wrap: anywhere;
++}
++
++.queue-card-note {
++  display: -webkit-box;
++  -webkit-box-orient: vertical;
++  -webkit-line-clamp: 2;
++  line-clamp: 2;
++  overflow: hidden;
++  overflow-wrap: anywhere;
 +}
 +
 +.queue-card-title:hover {
