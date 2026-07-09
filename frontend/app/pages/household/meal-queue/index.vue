@@ -139,16 +139,9 @@
                 </v-icon>
               </div>
             </div>
-            <div class="d-flex align-center flex-grow-1 pa-2" style="min-width: 0;">
-              <v-checkbox
-                :model-value="item.eaten"
-                hide-details
-                density="compact"
-                class="queue-card-checkbox mr-2"
-                @update:model-value="(val) => actions.setEaten(item.id, !!val)"
-              />
+            <div class="d-flex flex-grow-1 py-1 pl-2" style="min-width: 0;">
               <div
-                class="flex-grow-1"
+                class="flex-grow-1 d-flex flex-column justify-center"
                 style="min-width: 0;"
                 :style="item.eaten ? 'text-decoration: line-through; opacity: 0.6;' : ''"
               >
@@ -163,9 +156,18 @@
                   {{ item.note }}
                 </div>
               </div>
-              <v-btn icon variant="text" size="small" @click="actions.deleteOne(item.id)">
-                <v-icon>{{ $globals.icons.delete }}</v-icon>
-              </v-btn>
+              <div class="d-flex flex-column align-center justify-space-around queue-card-controls">
+                <v-checkbox
+                  :model-value="item.eaten"
+                  hide-details
+                  density="compact"
+                  class="queue-card-checkbox"
+                  @update:model-value="(val) => actions.setEaten(item.id, !!val)"
+                />
+                <v-btn icon variant="text" size="small" @click="actions.deleteOne(item.id)">
+                  <v-icon>{{ $globals.icons.delete }}</v-icon>
+                </v-btn>
+              </div>
             </div>
           </div>
         </v-card>
@@ -306,13 +308,36 @@ async function openShoppingListDialog() {
   cursor: pointer;
 }
 
+/* Pin the eaten checkbox to a fixed 40px column. v-checkbox is a v-input
+   (flex: 1 1 auto) whose inner .v-selection-control is flex: 1 0, so without
+   a hard basis it can expand over the recipe title. */
+/* Narrow fixed-width column on the right holding the checkbox stacked
+   above the delete button, leaving the full remaining width for the text. */
+.queue-card-controls {
+  flex: 0 0 44px;
+  width: 44px;
+}
+
+.queue-card-checkbox {
+  flex: 0 0 40px !important;
+  width: 40px;
+  max-width: 40px;
+}
+
+.queue-card-checkbox :deep(.v-selection-control) {
+  min-width: 0;
+  justify-content: center;
+}
+
 .queue-card-title {
   color: inherit;
   text-decoration: none;
+  /* Clamp long recipe names to two lines with an ellipsis instead of
+     letting them wrap indefinitely and stretch the card vertically. */
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
   overflow: hidden;
   overflow-wrap: anywhere;
 }
@@ -329,16 +354,4 @@ async function openShoppingListDialog() {
 .queue-card-title:hover {
   text-decoration: underline;
 }
-
-.queue-card-checkbox {
-  flex: 0 0 40px !important;
-  width: 40px;
-  max-width: 40px;
-}
-
-.queue-card-checkbox :deep(.v-selection-control) {
-  min-width: 0;
-  justify-content: center;
-}
-
 </style>

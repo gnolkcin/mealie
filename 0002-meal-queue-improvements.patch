@@ -1,4 +1,4 @@
-From 7925edbdf9733cbb4f3c052393749267fc5bc0b2 Mon Sep 17 00:00:00 2001
+From 84c8613416404d40a596d0fcbc7f133fba44b613 Mon Sep 17 00:00:00 2001
 From: Fork Author <fork@example.com>
 Date: Wed, 8 Jul 2026 15:59:04 +0000
 Subject: [PATCH] feat: meal queue improvements
@@ -34,11 +34,11 @@ Subject: [PATCH] feat: meal queue improvements
  frontend/app/composables/use-meal-queue.ts    |  38 ++++
  frontend/app/lang/messages/en-US.json         |   6 +
  frontend/app/lib/api/user/meal-queue.ts       |  12 +-
- .../app/pages/household/meal-queue/index.vue  | 202 +++++++++++++++---
+ .../app/pages/household/meal-queue/index.vue  | 211 +++++++++++++++---
  mealie/repos/repository_meal_queue.py         |  11 +
  .../households/controller_meal_queue.py       |  15 +-
  .../test_meal_queue_improvements.py           |  53 +++++
- 12 files changed, 333 insertions(+), 32 deletions(-)
+ 12 files changed, 342 insertions(+), 32 deletions(-)
  create mode 100644 tests/integration_tests/user_household_tests/test_meal_queue_improvements.py
 
 diff --git a/frontend/app/components/Domain/Recipe/RecipeActionMenu.vue b/frontend/app/components/Domain/Recipe/RecipeActionMenu.vue
@@ -273,7 +273,7 @@ index dbf1b2d..aa56d90 100644
      });
    }
 diff --git a/frontend/app/pages/household/meal-queue/index.vue b/frontend/app/pages/household/meal-queue/index.vue
-index 4bf028c..5c2dedd 100644
+index 4bf028c..927961f 100644
 --- a/frontend/app/pages/household/meal-queue/index.vue
 +++ b/frontend/app/pages/household/meal-queue/index.vue
 @@ -42,17 +42,38 @@
@@ -331,7 +331,7 @@ index 4bf028c..5c2dedd 100644
          <BaseButton
            color="primary"
            :icon="$globals.icons.foods"
-@@ -81,36 +110,63 @@
+@@ -81,36 +110,65 @@
          :key="item.id"
          cols="12"
          sm="6"
@@ -383,20 +383,11 @@ index 4bf028c..5c2dedd 100644
 +                <v-icon color="primary" size="60">
 +                  {{ $globals.icons.primary }}
 +                </v-icon>
-               </div>
--              <div v-if="item.note" class="text-caption text-medium-emphasis">
--                {{ item.note }}
++              </div>
 +            </div>
-+            <div class="d-flex align-center flex-grow-1 pa-2" style="min-width: 0;">
-+              <v-checkbox
-+                :model-value="item.eaten"
-+                hide-details
-+                density="compact"
-+                class="queue-card-checkbox mr-2"
-+                @update:model-value="(val) => actions.setEaten(item.id, !!val)"
-+              />
++            <div class="d-flex flex-grow-1 py-1 pl-2" style="min-width: 0;">
 +              <div
-+                class="flex-grow-1"
++                class="flex-grow-1 d-flex flex-column justify-center"
 +                style="min-width: 0;"
 +                :style="item.eaten ? 'text-decoration: line-through; opacity: 0.6;' : ''"
 +              >
@@ -411,9 +402,20 @@ index 4bf028c..5c2dedd 100644
 +                  {{ item.note }}
 +                </div>
                </div>
-+              <v-btn icon variant="text" size="small" @click="actions.deleteOne(item.id)">
-+                <v-icon>{{ $globals.icons.delete }}</v-icon>
-+              </v-btn>
+-              <div v-if="item.note" class="text-caption text-medium-emphasis">
+-                {{ item.note }}
++              <div class="d-flex flex-column align-center justify-space-around queue-card-controls">
++                <v-checkbox
++                  :model-value="item.eaten"
++                  hide-details
++                  density="compact"
++                  class="queue-card-checkbox"
++                  @update:model-value="(val) => actions.setEaten(item.id, !!val)"
++                />
++                <v-btn icon variant="text" size="small" @click="actions.deleteOne(item.id)">
++                  <v-icon>{{ $globals.icons.delete }}</v-icon>
++                </v-btn>
+               </div>
              </div>
 -            <v-btn icon variant="text" size="small" @click="actions.deleteOne(item.id)">
 -              <v-icon>{{ $globals.icons.delete }}</v-icon>
@@ -421,7 +423,7 @@ index 4bf028c..5c2dedd 100644
            </div>
          </v-card>
        </v-col>
-@@ -125,10 +181,15 @@ import { useMealQueue } from "~/composables/use-meal-queue";
+@@ -125,10 +183,15 @@ import { useMealQueue } from "~/composables/use-meal-queue";
  import { useRecipeSearch } from "~/composables/recipes/use-recipe-search";
  import { normalizeFilter } from "~/composables/use-utils";
  import { useUserApi } from "~/composables/api";
@@ -437,7 +439,7 @@ index 4bf028c..5c2dedd 100644
  
  useSeoMeta({
    title: i18n.t("meal-plan.meal-queue"),
-@@ -139,6 +200,22 @@ const { queueItems, uneatenItems, includeEaten, actions, loading } = useMealQueu
+@@ -139,6 +202,22 @@ const { queueItems, uneatenItems, includeEaten, actions, loading } = useMealQueu
  const search = useRecipeSearch(api);
  const noteOnly = ref(false);
  
@@ -460,7 +462,7 @@ index 4bf028c..5c2dedd 100644
  const newItem = ref({
    title: "",
    note: "",
-@@ -148,7 +225,9 @@ const newItem = ref({
+@@ -148,7 +227,9 @@ const newItem = ref({
  const state = ref({
    addDialog: false,
    shoppingListDialog: false,
@@ -470,7 +472,7 @@ index 4bf028c..5c2dedd 100644
  });
  
  const isCreateDisabled = computed(() => {
-@@ -168,6 +247,19 @@ async function createAndReset() {
+@@ -168,6 +249,19 @@ async function createAndReset() {
    resetNewItem();
  }
  
@@ -490,7 +492,7 @@ index 4bf028c..5c2dedd 100644
  const hasUneatenRecipes = computed(() => uneatenItems.value.some(item => !!item.recipe));
  
  const uneatenRecipesWithScales = computed(() => {
-@@ -197,4 +289,60 @@ async function openShoppingListDialog() {
+@@ -197,4 +291,67 @@ async function openShoppingListDialog() {
  .left-color-border {
    border-left: 5px solid rgb(var(--v-theme-primary)) !important;
  }
@@ -514,6 +516,13 @@ index 4bf028c..5c2dedd 100644
 +/* Pin the eaten checkbox to a fixed 40px column. v-checkbox is a v-input
 +   (flex: 1 1 auto) whose inner .v-selection-control is flex: 1 0, so without
 +   a hard basis it can expand over the recipe title. */
++/* Narrow fixed-width column on the right holding the checkbox stacked
++   above the delete button, leaving the full remaining width for the text. */
++.queue-card-controls {
++  flex: 0 0 44px;
++  width: 44px;
++}
++
 +.queue-card-checkbox {
 +  flex: 0 0 40px !important;
 +  width: 40px;
@@ -532,8 +541,8 @@ index 4bf028c..5c2dedd 100644
 +     letting them wrap indefinitely and stretch the card vertically. */
 +  display: -webkit-box;
 +  -webkit-box-orient: vertical;
-+  -webkit-line-clamp: 2;
-+  line-clamp: 2;
++  -webkit-line-clamp: 3;
++  line-clamp: 3;
 +  overflow: hidden;
 +  overflow-wrap: anywhere;
 +}
