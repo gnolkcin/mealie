@@ -143,7 +143,8 @@
               <v-checkbox
                 :model-value="item.eaten"
                 hide-details
-                class="flex-grow-0 mr-1"
+                density="compact"
+                class="queue-card-checkbox mr-2"
                 @update:model-value="(val) => actions.setEaten(item.id, !!val)"
               />
               <div
@@ -314,4 +315,16 @@ async function openShoppingListDialog() {
 .queue-card-title:hover {
   text-decoration: underline;
 }
+
+.queue-card-checkbox {
+  flex: 0 0 40px !important;
+  width: 40px;
+  max-width: 40px;
+}
+
+.queue-card-checkbox :deep(.v-selection-control) {
+  min-width: 0;
+  justify-content: center;
+}
+
 </style>
